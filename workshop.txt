@@ -1,0 +1,6 @@
+version=1
+id=3634101657
+title=MaxAllSkills [B42]
+description=Instantly skills maxing & Positive traits cost 1
+tags=Build 42;Skills;Traits
+visibility=public
