@@ -1,68 +1,136 @@
 -- ============================================
--- PRY DOOR ADVANCED - FIXED VERSION
--- Version: 3.1.0 | Bug-Free Edition
+-- PRY DOOR ADVANCED - KEYBIND ONLY
+-- Version: 3.6.0 | Keybind: `
+-- Features: Door, Garage, Window, Vehicle
+-- Professional Grade - Window Fixed
 -- ============================================
 
-require "ISInventoryPaneContextMenu"
 require "TimedActions/ISTimedActionQueue"
 require "TimedActions/ISBaseTimedAction"
+require "ISUI/ISWorldObjectContextMenu"
 
-local PRY_MOD = {
-    VERSION = "3.1.0",
-    DEBUG = true  -- Set true untuk debugging
-}
+local PRY_MOD = { VERSION = "3.6.0", DEBUG = false }
 
 -- ============================================
--- SIMPLE OBJECT DETECTION (FIXED)
+-- UTILITY FUNCTIONS
 -- ============================================
+local function isLockedWorldObject(obj)
+    if instanceof(obj, "IsoWindow") then
+        -- Window: harus LOCKED dan TIDAK open/smashed
+        if obj:isPermaLocked() then return false end
+        return obj:isLocked() and not obj:IsOpen() and not obj:isSmashed()
+    elseif instanceof(obj, "IsoDoor") then
+        -- Door: harus LOCKED (tidak peduli open/closed)
+        return obj:isLocked() or obj:isLockedByKey()
+    elseif instanceof(obj, "IsoThumpable") and obj:isDoor() then
+        -- Thumpable Door: harus LOCKED
+        return obj:isLocked() or obj:isLockedByKey()
+    end
+    return false
+end
 
-local function canPryObject(obj)
-    if not obj then return nil end
-    
-    -- Door
-    if instanceof(obj, "IsoDoor") and obj:isLocked() and not obj:isBarricaded() then
+local function getWorldCategory(obj)
+    if instanceof(obj, "IsoWindow") then
+        return "window"
+    elseif instanceof(obj, "IsoDoor") then
         local sprite = obj:getSprite()
-        if sprite and sprite:getName() and sprite:getName():contains("Garage") then
-            return "garage"
+        if sprite and sprite:getName() then
+            local spriteName = tostring(sprite:getName()):lower()
+            if spriteName:find("garage") then
+                return "garage"
+            end
+        end
+        return "door"
+    elseif instanceof(obj, "IsoThumpable") and obj:isDoor() then
+        local sprite = obj:getSprite()
+        if sprite and sprite:getName() then
+            local spriteName = tostring(sprite:getName()):lower()
+            if spriteName:find("garage") then
+                return "garage"
+            end
         end
         return "door"
     end
-    
-    -- Window (FIXED INI!)
-    if instanceof(obj, "IsoWindow") then
-        if obj:isLocked() or obj:isBarricaded() then
-            return "window"
-        end
-    end
-    
-    -- Vehicle Door
-    if instanceof(obj, "VehicleDoor") and obj:isLocked() then
-        return "vehicle"
-    end
-    
     return nil
 end
 
 -- ============================================
--- TOOL FINDER (SIMPLE VERSION)
+-- OBJECT DETECTION
 -- ============================================
+local function findWorldTarget(player)
+    local sq = player:getSquare()
+    if not sq then return nil, nil end
+    
+    -- Check current and adjacent squares
+    for dx = -1, 1 do
+        for dy = -1, 1 do
+            local checkSq = getCell():getGridSquare(sq:getX() + dx, sq:getY() + dy, sq:getZ())
+            if checkSq then
+                local objs = checkSq:getObjects()
+                for i = 0, objs:size() - 1 do
+                    local obj = objs:get(i)
+                    
+                    -- STRICT CHECK: Must be LOCKED to be pryable
+                    if isLockedWorldObject(obj) then
+                        local category = getWorldCategory(obj)
+                        if category then
+                            -- Check if barricaded
+                            local barricaded = false
+                            if obj.isBarricaded then
+                                barricaded = obj:isBarricaded()
+                            end
+                            
+                            if not barricaded then
+                                return obj, category
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return nil, nil
+end
 
-local function findToolInInventory(player)
-    local inv = player:getInventory()
+local function findVehicleTarget(player)
+    local sq = player:getSquare()
+    if not sq then return nil, nil end
     
-    -- Cek tool berurutan
-    local tools = {
-        "Base.Crowbar",
-        "Base.Axe", 
-        "Base.Screwdriver",
-        "Base.Hammer",
-        "Base.Wrench"
-    }
-    
-    for _, toolType in ipairs(tools) do
-        local item = inv:getFirstType(toolType)
-        if item then
-            return item, toolType
+    -- Check current and adjacent squares for vehicles
+    for dx = -1, 1 do
+        for dy = -1, 1 do
+            local checkSq = getCell():getGridSquare(sq:getX() + dx, sq:getY() + dy, sq:getZ())
+            if checkSq then
+                local vehicle = checkSq:getVehicleContainer()
+                if vehicle then
+                    -- Find nearest locked door
+                    local closestPart = nil
+                    local closestDist = 999999
+                    
+                    for i = 0, vehicle:getPartCount() - 1 do
+                        local part = vehicle:getPartByIndex(i)
+                        if part and part:getDoor() then
+                            local door = part:getDoor()
+                            -- STRICT CHECK: Must be LOCKED
+                            if door and door:isLocked() then
+                                local area = vehicle:getAreaCenter(part:getArea())
+                                if area then
+                                    local dist = player:DistToSquared(area:getX(), area:getY())
+                                    if dist < closestDist and dist <= 4 then
+                                        closestDist = dist
+                                        closestPart = part
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    
+                    if closestPart then
+                        return closestPart, vehicle
+                    end
+                end
+            end
         end
     end
     
@@ -70,23 +138,39 @@ local function findToolInInventory(player)
 end
 
 -- ============================================
--- SIMPLE ACTION CLASS (FIXED)
+-- TOOL FINDER
 -- ============================================
+local function findToolInInventory(player)
+    local inv = player:getInventory()
+    local tools = {"Base.Crowbar", "Base.Axe", "Base.Screwdriver", "Base.Hammer", "Base.Wrench"}
+    
+    for _, t in ipairs(tools) do
+        local item = inv:getFirstType(t)
+        if item then return item end
+    end
+    
+    return nil
+end
 
+-- ============================================
+-- ACTION CLASS
+-- ============================================
 PrySimpleAction = ISBaseTimedAction:derive("PrySimpleAction")
 
-function PrySimpleAction:new(player, object, tool, objType)
+function PrySimpleAction:new(player, object, tool, objType, vehicle, vehiclePart)
     local o = ISBaseTimedAction.new(self, player)
     o.object = object
     o.tool = tool
-    o.objType = objType or "door"
+    o.objType = objType
+    o.vehicle = vehicle
+    o.vehiclePart = vehiclePart
     
-    -- Adjust time
-    if o.objType == "vehicle" then
+    -- Set duration based on type
+    if objType == "vehicle" then
         o.maxTime = 200
-    elseif o.objType == "garage" then
+    elseif objType == "garage" then
         o.maxTime = 180
-    elseif o.objType == "window" then
+    elseif objType == "window" then
         o.maxTime = 120
     else
         o.maxTime = 150
@@ -95,335 +179,270 @@ function PrySimpleAction:new(player, object, tool, objType)
     o.stopOnWalk = true
     o.stopOnRun = true
     o.forceProgressBar = true
-    
-    print("[PRY-DEBUG] Action created: " .. objType .. " | Time: " .. o.maxTime)
-    
     return o
 end
 
 function PrySimpleAction:isValid()
-    if not self.character or not self.object or not self.tool then 
-        print("[PRY-DEBUG] Invalid: Missing params")
-        return false 
-    end
+    if not self.character or not self.tool then return false end
+    if not self.character:getInventory():contains(self.tool) then return false end
     
-    if not self.character:getInventory():contains(self.tool) then
-        print("[PRY-DEBUG] Invalid: Tool not in inventory")
-        return false
+    if self.objType == "vehicle" then
+        if not self.vehiclePart or not self.vehicle then return false end
+        local door = self.vehiclePart:getDoor()
+        if not door or not door:isLocked() then return false end
+        local area = self.vehicle:getAreaCenter(self.vehiclePart:getArea())
+        if not area or self.character:DistToSquared(area:getX(), area:getY()) > 4 then return false end
+        return true
+    else
+        if not self.object then return false end
+        -- STRICT VALIDATION: Must still be locked
+        if not isLockedWorldObject(self.object) then return false end
+        local sq = self.object:getSquare()
+        if not sq or self.character:DistToSquared(sq:getX() + 0.5, sq:getY() + 0.5) > 4 then return false end
+        return true
     end
-    
-    -- Object validation
-    if self.objType == "door" or self.objType == "garage" then
-        return instanceof(self.object, "IsoDoor") and self.object:isLocked()
-    elseif self.objType == "window" then
-        return instanceof(self.object, "IsoWindow") and (self.object:isLocked() or self.object:isBarricaded())
-    elseif self.objType == "vehicle" then
-        return instanceof(self.object, "VehicleDoor") and self.object:isLocked()
-    end
-    
-    print("[PRY-DEBUG] Invalid: No matching object type")
-    return false
 end
 
-function PrySimpleAction:start()
-    print("[PRY-DEBUG] Action started")
-    
-    -- Set animation
-    if self.objType == "window" then
-        self:setActionAnim("AttackWindow")
-    else
-        self:setActionAnim("AttackDoor")
+function PrySimpleAction:waitToStart()
+    if self.objType == "vehicle" and self.vehicle then
+        self.character:faceLocation(self.vehicle:getX(), self.vehicle:getY())
+    elseif self.object then
+        self.character:faceThisObject(self.object)
     end
-    
-    self:setOverrideHandModels(self.tool, nil)
-    self.character:playSound("BreakDoor")
+    return self.character:shouldBeTurning()
 end
 
 function PrySimpleAction:update()
-    -- Optional sound effects
-    if ZombRand(100) < 10 then
-        self.character:playSound("BreakBarricadeWood")
+    if self.objType == "vehicle" and self.vehicle then
+        self.character:faceLocation(self.vehicle:getX(), self.vehicle:getY())
+    elseif self.object then
+        self.character:faceThisObject(self.object)
     end
+    self.character:setMetabolicTarget(Metabolics.HeavyDomestic)
+end
+
+function PrySimpleAction:start()
+    if self.objType == "window" then
+        self:setActionAnim("RemoveBarricade")
+        self:setAnimVariable("RemoveBarricade", "CrowbarHigh")
+    else
+        self:setActionAnim("RemoveBarricade")
+        self:setAnimVariable("RemoveBarricade", "CrowbarMid")
+    end
+    
+    self:setOverrideHandModels(self.tool, nil)
+    self.sound = self.character:getEmitter():playSound("CrowbarHit")
+end
+
+function PrySimpleAction:stop()
+    if self.sound then
+        self.character:getEmitter():stopSound(self.sound)
+    end
+    ISBaseTimedAction.stop(self)
 end
 
 function PrySimpleAction:perform()
-    print("[PRY-DEBUG] Action performing...")
-    
-    local sq = nil
-    
-    -- Get square
-    if self.objType == "vehicle" then
-        local vehicle = self.object:getVehicle()
-        if vehicle then
-            sq = vehicle:getSquare()
-        end
-    else
-        sq = self.object:getSquare()
+    if self.sound then
+        self.character:getEmitter():stopSound(self.sound)
     end
     
-    if sq then
-        -- Calculate success chance
-        local strength = self.character:getPerkLevel(Perks.Strength)
-        local baseChance = 50 + (strength * 3)
-        baseChance = math.min(95, math.max(10, baseChance))
-        
-        local roll = ZombRand(100)
-        local success = roll < baseChance
-        
-        local args = {
-            x = sq:getX(),
-            y = sq:getY(),
-            z = sq:getZ(),
-            tool = self.tool:getType():lower(),
-            objType = self.objType,
-            toolType = self.tool:getFullType(),
-            success = success,
-            chance = baseChance,
-            roll = roll
-        }
-        
-        -- Add vehicle data
-        if self.objType == "vehicle" then
-            local vehicle = self.object:getVehicle()
-            if vehicle then
-                args.vehicleId = vehicle:getId()
-                args.partId = self.object:getId()
-            end
-        end
-        
-        print("[PRY-DEBUG] Sending command: " .. self.objType .. " | Chance: " .. baseChance .. "%")
-        sendClientCommand(self.character, "PryDoor", "tryPry", args)
-        
-        -- Local feedback
-        if success then
-            self.character:playSound("BreakDoor")
-            self.character:getXp():AddXP(Perks.Strength, 6)
-        else
-            self.character:playSound("BreakBarricadeMetal")
-        end
+    -- Handle different object types
+    if self.objType == "vehicle" then
+        self:completeVehicle()
+    elseif self.objType == "window" then
+        self:completeWindow()
+    elseif self.objType == "door" or self.objType == "garage" then
+        self:completeDoor()
+    end
+    
+    -- Add XP
+    self.character:getXp():AddXP(Perks.Strength, 2)
+    if self.objType == "vehicle" then
+        self.character:getXp():AddXP(Perks.Mechanics, 3)
+    else
+        self.character:getXp():AddXP(Perks.Woodwork, 3)
     end
     
     ISBaseTimedAction.perform(self)
 end
 
-function PrySimpleAction:stop()
-    ISBaseTimedAction.stop(self)
-end
-
--- ============================================
--- CONTEXT MENU HANDLER (FIXED - INI YANG BEKERJA!)
--- ============================================
-
-local function onFillWorldObjectContextMenu(player, context, worldobjects)
-    print("[PRY-DEBUG] Context menu triggered")
+function PrySimpleAction:completeDoor()
+    if not self.object then return end
     
-    local playerObj = getSpecificPlayer(player)
-    if not playerObj then 
-        print("[PRY-DEBUG] No player object")
-        return 
+    -- Unlock the door
+    self.object:setLocked(false)
+    self.object:setLockedByKey(false)
+    
+    -- Sync state
+    self.object:sync()
+    
+    -- Handle multiplayer
+    if isServer() then
+        sendServerCommand(self.character, "PryDoor", "DoClientOpenDoor", {
+            x = self.object:getX(),
+            y = self.object:getY(),
+            z = self.object:getZ(),
+            playerIndex = self.character:getPlayerNum() or 0
+        })
     end
     
-    -- Cek satu per satu object
-    for _, obj in ipairs(worldobjects) do
-        print("[PRY-DEBUG] Checking object: " .. tostring(obj))
-        
-        local objType = canPryObject(obj)
-        
-        if objType then
-            print("[PRY-DEBUG] Found pryable object: " .. objType)
-            
-            -- Cari tool
-            local tool, toolType = findToolInInventory(playerObj)
-            
-            if tool then
-                print("[PRY-DEBUG] Found tool: " .. tool:getType())
-                
-                -- Buat teks option
-                local optionText = ""
-                if objType == "window" then
-                    optionText = "Pry Open Window"
-                elseif objType == "garage" then
-                    optionText = "Pry Open Garage"
-                elseif objType == "vehicle" then
-                    optionText = "Pry Open Vehicle Door"
-                else
-                    optionText = "Pry Open Door"
-                end
-                
-                -- Tambahkan icon tool jika ada
-                optionText = optionText .. " (" .. tool:getDisplayName() .. ")"
-                
-                -- Add to context menu
-                local option = context:addOption(optionText, playerObj, function()
-                    print("[PRY-DEBUG] Context menu option clicked!")
-                    ISTimedActionQueue.add(PrySimpleAction:new(playerObj, obj, tool, objType))
-                end)
-                
-                -- Add tooltip
-                local tooltip = ISToolTip:new()
-                tooltip:initialise()
-                tooltip:setVisible(false)
-                tooltip:setName(optionText)
-                
-                local tooltipText = "Use " .. tool:getDisplayName() .. " to pry open this " .. objType .. ".\n"
-                tooltipText = tooltipText .. "Requires strength and takes some time.\n"
-                tooltipText = tooltipText .. "Success chance depends on your Strength skill."
-                
-                tooltip.description = tooltipText
-                option.toolTip = tooltip
-                
-                -- Hanya tampilkan satu option
-                break
-            else
-                print("[PRY-DEBUG] No tool found in inventory")
-                
-                -- Show disabled option
-                local option = context:addOption("Pry Open (Need Tool)", nil, nil)
-                option.notAvailable = true
-                
-                local tooltip = ISToolTip:new()
-                tooltip:initialise()
-                tooltip:setVisible(false)
-                tooltip.description = "You need a tool (Crowbar, Axe, Screwdriver, Hammer, or Wrench) to pry this open."
-                option.toolTip = tooltip
-                
-                break
-            end
+    -- Open in singleplayer or server
+    if not isClient() then
+        if not self.object:IsOpen() then
+            self.object:ToggleDoor(self.character)
         end
     end
+    
+    self.character:playSound("BreakDoor")
+end
+
+function PrySimpleAction:completeWindow()
+    if not self.object then return end
+    
+    -- Unlock window first
+    self.object:setIsLocked(false)
+    
+    -- Sync state
+    self.object:sync()
+    
+    -- Handle multiplayer
+    if isServer() then
+        sendServerCommand(self.character, "PryDoor", "DoClientOpenWindow", {
+            x = self.object:getX(),
+            y = self.object:getY(),
+            z = self.object:getZ(),
+            playerIndex = self.character:getPlayerNum() or 0
+        })
+    end
+    
+    -- Open in singleplayer or server
+    if not isClient() then
+        -- Use ISWorldObjectContextMenu method like STA_PryOpen
+        if ISWorldObjectContextMenu and ISWorldObjectContextMenu.onOpenCloseWindow then
+            ISWorldObjectContextMenu.onOpenCloseWindow(self.object, self.character:getPlayerNum())
+        end
+    end
+    
+    self.character:playSound("BreakDoor")
+end
+
+function PrySimpleAction:completeVehicle()
+    if not self.vehiclePart or not self.vehicle then return end
+    
+    local door = self.vehiclePart:getDoor()
+    if not door then return end
+    
+    -- Unlock door
+    door:setLocked(false)
+    
+    -- Transmit to clients in multiplayer
+    if self.vehicle.transmitPartDoor then
+        self.vehicle:transmitPartDoor(self.vehiclePart)
+    end
+    
+    self.character:playSound("BreakDoor")
 end
 
 -- ============================================
--- SERVER SIDE HANDLER (SIMPLE)
+-- SERVER COMMAND HANDLER (for multiplayer)
 -- ============================================
-
-local function onServerCommand(module, command, player, args)
-    if module ~= "PryDoor" or command ~= "tryPry" then return end
-    
-    print("[PRY-SERVER] Received command from " .. player:getDisplayName())
-    
+local function onServerCommand(module, command, args)
+    if module ~= "PryDoor" then return end
     if not args or not args.x then return end
     
     local sq = getCell():getGridSquare(args.x, args.y, args.z)
     if not sq then return end
     
-    local targetObj = nil
-    local objType = args.objType
+    local playerObj = getSpecificPlayer(args.playerIndex or 0)
+    if not playerObj then return end
     
-    -- Find object
-    if objType == "vehicle" and args.vehicleId then
-        local vehicle = getVehicleById(args.vehicleId)
-        if vehicle then
-            local part = vehicle:getPartById(args.partId)
-            if part and instanceof(part, "VehicleDoor") then
-                targetObj = part
-            end
-        end
-    else
-        for i = 0, sq:getObjects():size() - 1 do
-            local obj = sq:getObjects():get(i)
-            
-            if objType == "door" and instanceof(obj, "IsoDoor") then
-                targetObj = obj
-                break
-            elseif objType == "window" and instanceof(obj, "IsoWindow") then
-                targetObj = obj
-                break
-            elseif objType == "garage" and instanceof(obj, "IsoDoor") then
-                if obj:getSprite() and obj:getSprite():getName():contains("Garage") then
-                    targetObj = obj
-                    break
+    if command == "DoClientOpenWindow" then
+        local objs = sq:getObjects()
+        for i = 0, objs:size() - 1 do
+            local obj = objs:get(i)
+            if instanceof(obj, "IsoWindow") then
+                obj:setIsLocked(false)
+                -- Use ISWorldObjectContextMenu method
+                if ISWorldObjectContextMenu and ISWorldObjectContextMenu.onOpenCloseWindow then
+                    ISWorldObjectContextMenu.onOpenCloseWindow(obj, playerObj:getPlayerNum())
                 end
+                return
             end
         end
-    end
-    
-    if not targetObj then
-        print("[PRY-SERVER] Target object not found")
-        return
-    end
-    
-    -- Process result
-    if args.success then
-        print("[PRY-SERVER] Success! Opening " .. objType)
-        
-        if objType == "door" or objType == "garage" then
-            targetObj:setLocked(false)
-            targetObj:setLockedByKey(false)
-            targetObj:ToggleDoor(player)
-        elseif objType == "window" then
-            targetObj:setLocked(false)
-            targetObj:setBarricaded(false)
-            targetObj:ToggleWindow(player)
-        elseif objType == "vehicle" then
-            targetObj:setLocked(false)
+    elseif command == "DoClientOpenDoor" then
+        local objs = sq:getObjects()
+        for i = 0, objs:size() - 1 do
+            local obj = objs:get(i)
+            
+            if instanceof(obj, "IsoDoor") then
+                obj:setLocked(false)
+                obj:setLockedByKey(false)
+                if not obj:IsOpen() then
+                    obj:ToggleDoor(playerObj)
+                end
+                return
+            elseif instanceof(obj, "IsoThumpable") and obj:isDoor() then
+                obj:setLocked(false)
+                obj:setLockedByKey(false)
+                if not obj:IsOpen() then
+                    obj:ToggleDoor(playerObj)
+                end
+                return
+            end
         end
-    else
-        print("[PRY-SERVER] Failed to open " .. objType)
     end
 end
 
 -- ============================================
--- KEYBIND SUPPORT (OPTIONAL)
+-- KEYBIND SUPPORT (backtick `)
 -- ============================================
-
 local function onKeyPressed(key)
-    -- Hold Z untuk quick action
-    if key == Keyboard.KEY_Z then
-        local player = getSpecificPlayer(0)
-        if not player or player:getVehicle() then return end
-        
-        -- Cari object di sekitar
-        local sq = player:getSquare()
-        if not sq then return end
-        
-        for dx = -1, 1 do
-            for dy = -1, 1 do
-                local checkSq = getCell():getGridSquare(sq:getX() + dx, sq:getY() + dy, sq:getZ())
-                if checkSq then
-                    for i = 0, checkSq:getObjects():size() - 1 do
-                        local obj = checkSq:getObjects():get(i)
-                        local objType = canPryObject(obj)
-                        
-                        if objType then
-                            local tool = findToolInInventory(player)
-                            if tool then
-                                ISTimedActionQueue.add(PrySimpleAction:new(player, obj, tool, objType))
-                                return
-                            end
-                        end
-                    end
-                end
-            end
-        end
+    if key ~= Keyboard.KEY_GRAVE then return end
+    
+    local player = getSpecificPlayer(0)
+    if not player or player:getVehicle() then return end
+    
+    local tool = findToolInInventory(player)
+    if not tool then
+        player:Say("Need a prying tool!")
+        return
     end
+    
+    -- Check for vehicles first
+    local vehiclePart, vehicle = findVehicleTarget(player)
+    if vehiclePart and vehicle then
+        ISTimedActionQueue.add(PrySimpleAction:new(player, nil, tool, "vehicle", vehicle, vehiclePart))
+        return
+    end
+    
+    -- Check for world objects (doors, windows)
+    local worldObj, category = findWorldTarget(player)
+    if worldObj and category then
+        ISTimedActionQueue.add(PrySimpleAction:new(player, worldObj, tool, category, nil, nil))
+        return
+    end
+    
+    -- No locked objects found
+    player:Say("Nothing locked to pry nearby.")
 end
 
 -- ============================================
 -- INITIALIZATION
 -- ============================================
-
 local function init()
     print("=======================================")
     print("PRY DOOR ADVANCED v" .. PRY_MOD.VERSION)
-    print("Loading...")
+    print("Keybind: ` (Backtick)")
+    print("Professional Grade - Window Fixed")
     print("=======================================")
-    
-    -- Register events
-    Events.OnFillWorldObjectContextMenu.Add(onFillWorldObjectContextMenu)
-    Events.OnClientCommand.Add(onServerCommand)
     Events.OnKeyPressed.Add(onKeyPressed)
-    
-    print("[PRY-MOD] Successfully loaded!")
-    print("Features: Door, Window, Garage, Vehicle")
-    print("Tools: Crowbar, Axe, Screwdriver, Hammer, Wrench")
-    print("=======================================")
+    Events.OnServerCommand.Add(onServerCommand)
+    print("[PRY-MOD] Successfully Loaded!")
+    print("[PRY-MOD] Features: Locked Doors, Windows, Garages, Vehicles")
+    print("[PRY-MOD] Tools: Crowbar, Axe, Screwdriver, Hammer, Wrench")
+    print("[PRY-MOD] STRICT MODE: Only LOCKED objects can be pried")
+    print("[PRY-MOD] Closed but UNLOCKED objects = Cannot be pried")
 end
 
--- Initialize when game starts
 Events.OnGameStart.Add(init)
-
--- Untuk testing langsung
-if isClient() then
-    init()
-end
+if isClient() then init() end
