@@ -1,26 +1,74 @@
-Description:
-This mod allows players to forcibly open (pry) locked objects in Project Zomboid using a keybind. The main focus is on doors, garage doors, and vehicles. Windows are included in the code but are currently non-functional.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+</head>
+<body>
 
-Main Features:
-1 Pry locked doors, including standard doors and IsoThumpable doors.
-2 Pry garage doors with realistic animations and sounds.
-3 Pry vehicle doors, detecting the nearest locked door within range.
-4 Only locked objects can be pried; unlocked or already open objects are ignored.
-5 Supports multiplayer, syncing door, garage, and vehicle states across players.
-6 Compatible with various prying tools: Crowbar, Axe, Screwdriver, Hammer, and Wrench.
-7 Grants XP for Strength, Woodwork, or Mechanics depending on the object.
-8 Use the ` (backtick) key to start prying when near a valid target.
+<h1>Pry Door Advanced</h1>
 
-Notes:
+<p>
+A lightweight <strong>Project Zomboid</strong> mod that allows players to forcibly open
+locked doors, garage doors, and vehicle doors using a keybind.
+</p>
 
-Windows are still listed in the code but not functional. Focus is on doors, garages, and vehicles.
+<h2>Overview</h2>
+<p>
+This mod introduces a prying mechanic for locked objects.
+When the player is near a valid locked target and has an appropriate tool,
+a timed prying action can be initiated via a keybind.
+Animations, sound effects, and multiplayer synchronization are handled automatically.
+</p>
 
-A prying tool must be in the player’s inventory to perform the action.
+<p>
+Window support exists in the codebase but is currently disabled.
+</p>
 
-How to Use:
-1 Approach a locked door, garage, or vehicle.
-2 Make sure you have a prying tool in your inventory.
-3 Press ` (backtick) to start prying.
-4 Animations and sounds will play during the action.
+<h2>Features</h2>
+<ul>
+  <li>Force open locked doors, including standard doors and <code>IsoThumpable</code> objects</li>
+  <li>Garage door support with animations and sound effects</li>
+  <li>Vehicle door prying with nearest-door detection</li>
+  <li>Locked-state validation to prevent unintended interactions</li>
+  <li>Multiplayer-safe state synchronization</li>
+  <li>Compatible tools:
+    <ul>
+      <li>Crowbar</li>
+      <li>Axe</li>
+      <li>Screwdriver</li>
+      <li>Hammer</li>
+      <li>Wrench</li>
+    </ul>
+  </li>
+  <li>Context-aware XP rewards (Strength, Woodwork, Mechanics)</li>
+  <li>Keybind-based activation using the <code>`</code> (backtick) key</li>
+</ul>
 
-Copyright © 2026 Dhevaio.
+<h2>Usage</h2>
+<ol>
+  <li>Move close to a locked door, garage door, or vehicle</li>
+  <li>Ensure a supported prying tool is present in the inventory</li>
+  <li>Press the <code>`</code> key to start the prying action</li>
+  <li>Wait for the action to complete</li>
+</ol>
+
+<h2>Notes</h2>
+<ul>
+  <li>Window prying is currently disabled</li>
+  <li>Only locked objects can be pried open</li>
+  <li>No context menu interaction is used</li>
+</ul>
+
+<h2>Compatibility</h2>
+<ul>
+  <li>Project Zomboid (singleplayer and multiplayer)</li>
+  <li>Designed for keybind-only interaction</li>
+</ul>
+
+<h2>Copyright</h2>
+<p>
+© 2026 Dhevaio
+</p>
+
+</body>
+</html>
