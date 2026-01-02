@@ -1,9 +1,9 @@
-require "PryDoor/PryDoor_Config"
-require "PryDoor/PryDoor_Utils"
-require "PryDoor/PryDoor_Detection"
-require "PryDoor/PryDoor_Action"
-require "PryDoor/PryDoor_Network"
-require "PryDoor/PryDoor_Keybind"
+require "PryDoor_Config"
+require "PryDoor_Utils"
+require "PryDoor_Detection"
+require "PryDoor_Action"
+require "PryDoor_Network"
+require "PryDoor_Keybind"
 
 Events.OnGameStart.Add(function()
     print("PRY DOOR ADVANCED v"..PryDoor.Config.VERSION.." loaded")
