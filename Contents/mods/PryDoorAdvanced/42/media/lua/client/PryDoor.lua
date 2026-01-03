@@ -3,13 +3,14 @@
 -- Version: 3.6.5 | Keybind: `
 -- Features: Door, Garage, Window, Vehicle
 -- Adds: Skill Check, Tool Check, Chance Fail
+-- ENHANCED: Specific tool requirements per object type
 -- ============================================
 
 require "TimedActions/ISTimedActionQueue"
 require "TimedActions/ISBaseTimedAction"
 require "ISUI/ISWorldObjectContextMenu"
 
-local PRY_MOD = { VERSION = "3.6.5", DEBUG = false }
+local PRY_MOD = { VERSION = "3.6.5-ENHANCED", DEBUG = false }
 
 -- ============================================
 -- UTILITY FUNCTIONS
@@ -122,8 +123,121 @@ local function findVehicleTarget(player)
 end
 
 -- ============================================
--- TOOL & SKILL CHECK
+-- ENHANCED TOOL & SKILL CHECK
 -- ============================================
+
+-- Helper function to check if item type matches keywords
+local function itemMatchesKeywords(item, keywords)
+    if not item then return false end
+    local itemType = item:getType():lower()
+    for _, keyword in ipairs(keywords) do
+        if itemType:find(keyword) then
+            return true
+        end
+    end
+    return false
+end
+
+-- NEW: Find specific tool for vehicle (screwdriver or wrench)
+local function findVehicleTool(player)
+    local inv = player:getInventory()
+    local items = inv:getItems()
+    
+    -- Check primary hand
+    local primary = player:getPrimaryHandItem()
+    if itemMatchesKeywords(primary, {"screwdriver", "wrench"}) then
+        return primary
+    end
+    
+    -- Check secondary hand
+    local secondary = player:getSecondaryHandItem()
+    if itemMatchesKeywords(secondary, {"screwdriver", "wrench"}) then
+        return secondary
+    end
+    
+    -- Check inventory
+    for i = 0, items:size()-1 do
+        local item = items:get(i)
+        if itemMatchesKeywords(item, {"screwdriver", "wrench"}) then
+            return item
+        end
+    end
+    
+    return nil
+end
+
+-- NEW: Find specific tool for garage (crowbar only)
+local function findGarageTool(player)
+    local inv = player:getInventory()
+    local items = inv:getItems()
+    
+    -- Check primary hand
+    local primary = player:getPrimaryHandItem()
+    if itemMatchesKeywords(primary, {"crowbar"}) then
+        return primary
+    end
+    
+    -- Check secondary hand
+    local secondary = player:getSecondaryHandItem()
+    if itemMatchesKeywords(secondary, {"crowbar"}) then
+        return secondary
+    end
+    
+    -- Check inventory
+    for i = 0, items:size()-1 do
+        local item = items:get(i)
+        if itemMatchesKeywords(item, {"crowbar"}) then
+            return item
+        end
+    end
+    
+    return nil
+end
+
+-- NEW: Find specific tool for door (crowbar or screwdriver)
+local function findDoorTool(player)
+    local inv = player:getInventory()
+    local items = inv:getItems()
+    
+    -- Check primary hand
+    local primary = player:getPrimaryHandItem()
+    if itemMatchesKeywords(primary, {"crowbar", "screwdriver"}) then
+        return primary
+    end
+    
+    -- Check secondary hand
+    local secondary = player:getSecondaryHandItem()
+    if itemMatchesKeywords(secondary, {"crowbar", "screwdriver"}) then
+        return secondary
+    end
+    
+    -- Check inventory
+    for i = 0, items:size()-1 do
+        local item = items:get(i)
+        if itemMatchesKeywords(item, {"crowbar", "screwdriver"}) then
+            return item
+        end
+    end
+    
+    return nil
+end
+
+-- NEW: Find tool based on object type
+local function findToolForObjectType(player, objType)
+    if objType == "vehicle" then
+        return findVehicleTool(player)
+    elseif objType == "garage" then
+        return findGarageTool(player)
+    elseif objType == "door" then
+        return findDoorTool(player)
+    elseif objType == "window" then
+        -- Window can use crowbar or screwdriver
+        return findDoorTool(player)
+    end
+    return nil
+end
+
+-- OLD function kept for backward compatibility
 local function findToolInInventory(player)
     local inv = player:getInventory()
     local tools = {"Base.Crowbar","Base.Axe","Base.Screwdriver","Base.Hammer","Base.Wrench"}
@@ -138,7 +252,7 @@ local function hasRequiredSkill(player, objType)
     if objType == "vehicle" then
         return player:getPerkLevel(Perks.Mechanics) >= 2
     elseif objType == "garage" then
-        return player:getPerkLevel(Perks.Woodwork) >= 2
+        return player:getPerkLevel(Perks.MetalWelding) >= 2
     elseif objType == "door" or objType == "window" then
         return player:getPerkLevel(Perks.Woodwork) >= 1
     end
@@ -147,10 +261,24 @@ end
 
 local function getRequiredSkillText(objType)
     if objType == "vehicle" then return "Mechanics level 2"
-    elseif objType == "garage" then return "Woodwork level 2"
+    elseif objType == "garage" then return "MetalWelding level 2"
     elseif objType == "door" or objType == "window" then return "Woodwork level 1"
     end
     return ""
+end
+
+-- NEW: Get required tool text
+local function getRequiredToolText(objType)
+    if objType == "vehicle" then
+        return "screwdriver or wrench"
+    elseif objType == "garage" then
+        return "crowbar"
+    elseif objType == "door" then
+        return "crowbar or screwdriver"
+    elseif objType == "window" then
+        return "crowbar or screwdriver"
+    end
+    return "tool"
 end
 
 -- ============================================
@@ -341,36 +469,55 @@ local function onServerCommand(module, command, args)
 end
 
 -- ============================================
--- KEYBIND SUPPORT
+-- KEYBIND SUPPORT (ENHANCED WITH SPECIFIC TOOL CHECK)
 -- ============================================
 local function onKeyPressed(key)
     if key ~= Keyboard.KEY_GRAVE then return end
     local player = getSpecificPlayer(0)
     if not player or player:getVehicle() then return end
-    local tool = findToolInInventory(player)
-    if not tool then
-        player:Say("Need a prying tool!")
-        return
-    end
+    
+    -- Check for vehicle first
     local vehiclePart, vehicle = findVehicleTarget(player)
     if vehiclePart and vehicle then
+        -- Check skill first
         if not hasRequiredSkill(player,"vehicle") then
             player:Say("You need Mechanics level 2 to pry this vehicle!")
             return
         end
+        
+        -- Check for specific tool (screwdriver or wrench)
+        local tool = findVehicleTool(player)
+        if not tool then
+            player:Say("You need a screwdriver or wrench to pry vehicle doors!")
+            return
+        end
+        
         ISTimedActionQueue.add(PrySimpleAction:new(player,nil,tool,"vehicle",vehicle,vehiclePart))
         return
     end
+    
+    -- Check for world objects (door, garage, window)
     local worldObj, category = findWorldTarget(player)
     if worldObj and category then
+        -- Check skill first
         if not hasRequiredSkill(player,category) then
             local skillText = getRequiredSkillText(category)
             player:Say("You need "..skillText.." to pry this "..category.."!")
             return
         end
+        
+        -- Check for specific tool based on object type
+        local tool = findToolForObjectType(player, category)
+        if not tool then
+            local toolText = getRequiredToolText(category)
+            player:Say("You need a "..toolText.." to pry this "..category.."!")
+            return
+        end
+        
         ISTimedActionQueue.add(PrySimpleAction:new(player,worldObj,tool,category,nil,nil))
         return
     end
+    
     player:Say("Nothing locked to pry nearby.")
 end
 
@@ -381,7 +528,11 @@ local function init()
     print("=======================================")
     print("PRY DOOR ADVANCED v"..PRY_MOD.VERSION)
     print("Keybind: ` (Backtick)")
-    print("Adds Skill Check, Tool Check, Chance Fail")
+    print("ENHANCED: Specific Tool Requirements")
+    print("  - Vehicle: Screwdriver or Wrench")
+    print("  - Garage: Crowbar only")
+    print("  - Door: Crowbar or Screwdriver")
+    print("  - Window: Crowbar or Screwdriver")
     print("=======================================")
     Events.OnKeyPressed.Add(onKeyPressed)
     Events.OnServerCommand.Add(onServerCommand)

@@ -40,7 +40,7 @@ Window support exists in the codebase but is currently disabled.
       <li>Wrench</li>
     </ul>
   </li>
-  <li>Context-aware XP rewards (Strength, Woodwork, Mechanics)</li>
+  <li>Context-aware XP rewards (Strength, Carpentry, Mechanics)</li>
   <li>Keybind-based activation using the <code>`</code> (backtick) key</li>
 </ul>
 
