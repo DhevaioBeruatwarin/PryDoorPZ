@@ -1,25 +1,51 @@
+-- ============================================
+-- PRY DOOR ADVANCED v3.8.1-ANIMATED
+-- Keybind: ` (Backtick) | Trigger: LEFT CLICK
+-- Features: Animated Pry + Mini Game + Tool Durability
+-- MP-Safe | Supports: Door, Garage, Window, Vehicle
+-- This mod made by Dhevaio AKA dheva1o
+-- ============================================
 
 require "TimedActions/ISTimedActionQueue"
 require "TimedActions/ISBaseTimedAction"
 require "ISUI/ISWorldObjectContextMenu"
---dheva1o
-local PRY_MOD = { VERSION = "3.8.0-BALANCED", DEBUG = true }
+require "ISUI/ISPanel"
+
+local PRY_MOD = { VERSION = "3.8.1-ANIMATED", DEBUG = false }
 
 -- ============================================
--- TOOL DURABILITY CONFIG
+-- CONFIGURATION (REVISED - TOOLS LAST LONGER)
 -- ============================================
-local TOOL_DURABILITY_LOSS = {
-    screwdriver = { min = 5, max = 7 }, 
-    wrench      = { min = 3, max = 6 },
-    crowbar     = { min = 1, max = 3 }, 
+local MINIGAME = {
+    width = 500,       
+    height = 180,       
+    sliderWidth = 10,   
+    sliderHeight = 70, 
+    pivotWidth = 70,    
+    speed = 20,
+    autoCenterPivot = true,
+    debug = false
 }
 
-local FAIL_MULTIPLIER = 1.5
-local FALLBACK_DURABILITY_LOSS = 2 -- For unrecognized tools
+
+local TOOL_DURABILITY_LOSS = {
+    screwdriver = { min = 1, max = 2 },  
+    wrench      = { min = 1, max = 2 },  
+    crowbar     = { min = 1, max = 1 },  
+}
+
+local FAIL_MULTIPLIER = 1.2
+local FALLBACK_DURABILITY_LOSS = 5  
 
 -- ============================================
 -- UTILITY FUNCTIONS
 -- ============================================
+local function debugPrint(msg)
+    if PRY_MOD.DEBUG or MINIGAME.debug then
+        print("[PRY-DEBUG] " .. tostring(msg))
+    end
+end
+
 local function isLockedWorldObject(obj)
     if instanceof(obj, "IsoWindow") then
         if obj:isPermaLocked() then return false end
@@ -58,147 +84,53 @@ local function getWorldCategory(obj)
 end
 
 -- ============================================
--- HELPER: display name getter (safe)
+-- TOOL DURABILITY SYSTEM (MP-SAFE) - IMPROVED
 -- ============================================
-local function getItemDisplayName(item)
-    if not item then return "tool" end
-    if item.getDisplayName then
-        local ok, name = pcall(function() return item:getDisplayName() end)
-        if ok and name and name ~= "" then return name end
-    end
-    if item.getName then
-        local ok, name = pcall(function() return item:getName() end)
-        if ok and name and name ~= "" then return name end
-    end
-    if item.getType then
-        local ok, t = pcall(function() return item:getType() end)
-        if ok and t and t ~= "" then return t end
-    end
-    return "tool"
-end
-
--- ============================================
--- TOOL DURABILITY SYSTEM (CORE, NO MESSAGING)
--- - Returns boolean: true if tool broke (condition <= 0)
--- - Does not perform any client/server messaging. Caller handles notifications.
--- ============================================
-local function applyToolDurabilityLoss(tool, failed)
+local function applyToolDurabilityLoss(player, tool, failed)
     if not tool then return false end
 
-    local ok, tname = pcall(function() return tool:getType() end)
-    local t = (ok and tname) and tostring(tname):lower() or ""
-
-    local loss = 0
+    local t = tool:getType():lower()
+    local cfg = nil
 
     if t:find("screwdriver") then
-        -- Screwdriver cepat rusak: instant break (use entire condition)
-        local cur = 0
-        local okc = pcall(function() cur = tool:getCondition() end)
-        if not okc then cur = 0 end
-        loss = math.max(1, cur) -- ensure at least 1
+        cfg = TOOL_DURABILITY_LOSS.screwdriver
     elseif t:find("wrench") then
-        -- Wrench cepat rusak juga, but not always instant: reduce by 70% of current (min 1)
-        local cur = 0
-        local okc = pcall(function() cur = tool:getCondition() end)
-        if not okc then cur = 0 end
-        loss = math.max(1, math.floor(cur * 0.7))
+        cfg = TOOL_DURABILITY_LOSS.wrench
     elseif t:find("crowbar") then
-        -- Crowbar stable: use configured random loss
-        local cfg = TOOL_DURABILITY_LOSS.crowbar
-        if cfg then
-            loss = ZombRand(cfg.min, cfg.max + 1)
-        else
-            loss = FALLBACK_DURABILITY_LOSS
-        end
+        cfg = TOOL_DURABILITY_LOSS.crowbar
+    end
+
+    local loss = 0
+    
+    if cfg then
+        loss = ZombRand(cfg.min, cfg.max + 1)
     else
-        -- Unknown/modded tool: use fallback
         loss = FALLBACK_DURABILITY_LOSS
     end
 
     if failed then
         loss = math.floor(loss * FAIL_MULTIPLIER)
-        if loss < 1 then loss = 1 end
     end
 
-    -- Apply damage using condition API (most common)
-    local applied = false
-    local broke = false
-    do
-        local okg = pcall(function() return tool:getCondition() end)
-        if okg then
-            local cur = tool:getCondition() or 0
-            local newCond = math.max(0, cur - loss)
-            local oks = pcall(function() tool:setCondition(newCond) end)
-            applied = true
-            if newCond <= 0 then broke = true end
-        end
-    end
+    debugPrint("Tool damage: " .. loss .. " (failed=" .. tostring(failed) .. ")")
 
-    -- Fallback: used delta API (0..1)
-    if (not applied) and tool.getUsedDelta and tool.setUsedDelta then
-        local okud = pcall(function() return tool:getUsedDelta() end)
-        if okud then
-            local cur = tool:getUsedDelta() or 0
-            local delta = loss / 100.0
-            local newDelta = math.max(0, cur - delta)
-            pcall(function() tool:setUsedDelta(newDelta) end)
-            applied = true
-            if newDelta <= 0 then broke = true end
-        end
-    end
-
-    -- If nothing applied, try to call setCondition if exists with conservative value
-    if (not applied) and tool.setCondition then
-        pcall(function() tool:setCondition(math.max(0, (tool.getCondition and tool:getCondition() or 0) - loss)) end)
-        if tool.getCondition and tool:getCondition() <= 0 then broke = true end
-    end
-
-    return broke
-end
-
--- ============================================
--- MP-SAFE DAMAGE REQUEST
--- - If client: send server request to apply damage (server authoritative)
--- - If server (or singleplayer): apply directly and notify client if broken
--- ============================================
-local function requestDamageTool(player, tool, failed)
-    if not player or not tool then return end
-
-    -- Prepare payload: try to include item ID for reliable lookup
-    local payload = { failed = failed }
-
-    local okid, id = pcall(function() return tool:getID() end)
-    if okid and id then
-        payload.itemID = id
+    if isClient() then
+        sendClientCommand(player, "PryDoor", "ApplyToolDamage", {
+            toolType = tool:getType(),
+            damage = loss,
+            playerIndex = player:getPlayerNum()
+        })
     else
-        -- Fallback: send item type so server can search for a matching item
-        local okt, t = pcall(function() return tool:getType() end)
-        if okt and t then payload.itemType = t end
-    end
-
-    -- If we're on client, ask server to apply damage
-    if isClient() and sendServerCommand then
-        -- sendServerCommand(character, module, command, args)
-        pcall(sendServerCommand, player, "PryDoor", "DamageTool", payload)
-        return
-    end
-
-    -- If we're on server (or singleplayer), apply immediately
-    local broke = applyToolDurabilityLoss(tool, failed)
-    if broke then
-        -- Notify the player. If server, send client command to display message
-        local name = getItemDisplayName(tool)
-        if isServer() and sendClientCommand then
-            pcall(sendClientCommand, player, "PryDoor", "ShowBroken", { name = name })
-        else
-            -- Singleplayer or server-side local: just say
-            if player and player.Say then
-                player:Say("Your " .. name .. " broke!")
-            else
-                print("Your " .. name .. " broke!")
-            end
+        local newCondition = tool:getCondition() - loss
+        tool:setCondition(math.max(newCondition, 0))
+        
+        if newCondition <= 0 then
+            player:Say("Your " .. tool:getDisplayName() .. " broke!")
+            return true
         end
     end
+    
+    return false
 end
 
 -- ============================================
@@ -208,12 +140,12 @@ local function findWorldTarget(player)
     local sq = player:getSquare()
     if not sq then return nil, nil end
     
-    for dx = -1,1 do
-        for dy = -1,1 do
+    for dx = -1, 1 do
+        for dy = -1, 1 do
             local checkSq = getCell():getGridSquare(sq:getX() + dx, sq:getY() + dy, sq:getZ())
             if checkSq then
                 local objs = checkSq:getObjects()
-                for i = 0, objs:size()-1 do
+                for i = 0, objs:size() - 1 do
                     local obj = objs:get(i)
                     if isLockedWorldObject(obj) then
                         local category = getWorldCategory(obj)
@@ -237,15 +169,16 @@ end
 local function findVehicleTarget(player)
     local sq = player:getSquare()
     if not sq then return nil, nil end
-    for dx = -1,1 do
-        for dy = -1,1 do
-            local checkSq = getCell():getGridSquare(sq:getX()+dx,sq:getY()+dy,sq:getZ())
+    
+    for dx = -1, 1 do
+        for dy = -1, 1 do
+            local checkSq = getCell():getGridSquare(sq:getX() + dx, sq:getY() + dy, sq:getZ())
             if checkSq then
                 local vehicle = checkSq:getVehicleContainer()
                 if vehicle then
                     local closestPart = nil
                     local closestDist = 999999
-                    for i = 0, vehicle:getPartCount()-1 do
+                    for i = 0, vehicle:getPartCount() - 1 do
                         local part = vehicle:getPartByIndex(i)
                         if part and part:getDoor() then
                             local door = part:getDoor()
@@ -272,13 +205,11 @@ local function findVehicleTarget(player)
 end
 
 -- ============================================
--- ENHANCED TOOL & SKILL CHECK
+-- TOOL DETECTION
 -- ============================================
 local function itemMatchesKeywords(item, keywords)
     if not item then return false end
-    local ok, itype = pcall(function() return item:getType() end)
-    if not ok or not itype then return false end
-    local itemType = tostring(itype):lower()
+    local itemType = item:getType():lower()
     for _, keyword in ipairs(keywords) do
         if itemType:find(keyword) then
             return true
@@ -287,71 +218,23 @@ local function itemMatchesKeywords(item, keywords)
     return false
 end
 
-local function findVehicleTool(player)
+local function findToolInInventory(player, keywords)
     local inv = player:getInventory()
     local items = inv:getItems()
     
     local primary = player:getPrimaryHandItem()
-    if itemMatchesKeywords(primary, {"screwdriver", "wrench"}) then
+    if itemMatchesKeywords(primary, keywords) then
         return primary
     end
     
     local secondary = player:getSecondaryHandItem()
-    if itemMatchesKeywords(secondary, {"screwdriver", "wrench"}) then
+    if itemMatchesKeywords(secondary, keywords) then
         return secondary
     end
     
-    for i = 0, items:size()-1 do
+    for i = 0, items:size() - 1 do
         local item = items:get(i)
-        if itemMatchesKeywords(item, {"screwdriver", "wrench"}) then
-            return item
-        end
-    end
-    
-    return nil
-end
-
-local function findGarageTool(player)
-    local inv = player:getInventory()
-    local items = inv:getItems()
-    
-    local primary = player:getPrimaryHandItem()
-    if itemMatchesKeywords(primary, {"crowbar"}) then
-        return primary
-    end
-    
-    local secondary = player:getSecondaryHandItem()
-    if itemMatchesKeywords(secondary, {"crowbar"}) then
-        return secondary
-    end
-    
-    for i = 0, items:size()-1 do
-        local item = items:get(i)
-        if itemMatchesKeywords(item, {"crowbar"}) then
-            return item
-        end
-    end
-    
-    return nil
-end
-
-local function findDoorTool(player)
-    local inv = player:getInventory()
-    local items = inv:getItems()
-    
-    local primary = player:getPrimaryHandItem()
-    if itemMatchesKeywords(primary, {"crowbar", "screwdriver"}) then
-        return primary
-    end
-    
-    local secondary = player:getSecondaryHandItem()
-    if itemMatchesKeywords(secondary, {"crowbar", "screwdriver"}) then
-        return secondary
-    end
-    
-    for i = 0, items:size()-1 do
-        local item = items:get(i)
-        if itemMatchesKeywords(item, {"crowbar", "screwdriver"}) then
+        if itemMatchesKeywords(item, keywords) then
             return item
         end
     end
@@ -361,17 +244,18 @@ end
 
 local function findToolForObjectType(player, objType)
     if objType == "vehicle" then
-        return findVehicleTool(player)
+        return findToolInInventory(player, {"screwdriver", "wrench"})
     elseif objType == "garage" then
-        return findGarageTool(player)
-    elseif objType == "door" then
-        return findDoorTool(player)
-    elseif objType == "window" then
-        return findDoorTool(player)
+        return findToolInInventory(player, {"crowbar"})
+    elseif objType == "door" or objType == "window" then
+        return findToolInInventory(player, {"crowbar", "screwdriver"})
     end
     return nil
 end
 
+-- ============================================
+-- SKILL CHECK
+-- ============================================
 local function hasRequiredSkill(player, objType)
     if objType == "vehicle" then
         return player:getPerkLevel(Perks.Mechanics) >= 2
@@ -384,32 +268,27 @@ local function hasRequiredSkill(player, objType)
 end
 
 local function getRequiredSkillText(objType)
-    if objType == "vehicle" then return "Mechanics level 2"
-    elseif objType == "garage" then return "MetalWelding level 2"
-    elseif objType == "door" or objType == "window" then return "Woodwork level 1"
+    if objType == "vehicle" then return "Mechanics 2"
+    elseif objType == "garage" then return "MetalWelding 2"
+    elseif objType == "door" or objType == "window" then return "Woodwork 1"
     end
     return ""
 end
 
 local function getRequiredToolText(objType)
-    if objType == "vehicle" then
-        return "screwdriver or wrench"
-    elseif objType == "garage" then
-        return "crowbar"
-    elseif objType == "door" then
-        return "crowbar or screwdriver"
-    elseif objType == "window" then
-        return "crowbar or screwdriver"
+    if objType == "vehicle" then return "screwdriver or wrench"
+    elseif objType == "garage" then return "crowbar"
+    elseif objType == "door" or objType == "window" then return "crowbar or screwdriver"
     end
     return "tool"
 end
 
 -- ============================================
--- ACTION CLASS
+-- ANIMATED PRY ACTION
 -- ============================================
-PrySimpleAction = ISBaseTimedAction:derive("PrySimpleAction")
+PryAnimatedAction = ISBaseTimedAction:derive("PryAnimatedAction")
 
-function PrySimpleAction:new(player, object, tool, objType, vehicle, vehiclePart)
+function PryAnimatedAction:new(player, object, tool, objType, vehicle, vehiclePart)
     local o = ISBaseTimedAction.new(self, player)
     o.object = object
     o.tool = tool
@@ -428,29 +307,24 @@ function PrySimpleAction:new(player, object, tool, objType, vehicle, vehiclePart
     return o
 end
 
-function PrySimpleAction:isValid()
+function PryAnimatedAction:isValid()
     if not self.character or not self.tool then return false end
     if not self.character:getInventory():contains(self.tool) then return false end
-
-    if not hasRequiredSkill(self.character, self.objType) then return false end
+    if self.tool:getCondition() <= 0 then return false end
 
     if self.objType == "vehicle" then
         if not self.vehiclePart or not self.vehicle then return false end
         local door = self.vehiclePart:getDoor()
         if not door or not door:isLocked() then return false end
-        local area = self.vehicle:getAreaCenter(self.vehiclePart:getArea())
-        if not area or self.character:DistToSquared(area:getX(),area:getY()) > 4 then return false end
         return true
     else
         if not self.object then return false end
         if not isLockedWorldObject(self.object) then return false end
-        local sq = self.object:getSquare()
-        if not sq or self.character:DistToSquared(sq:getX()+0.5,sq:getY()+0.5) > 4 then return false end
         return true
     end
 end
 
-function PrySimpleAction:waitToStart()
+function PryAnimatedAction:waitToStart()
     if self.objType == "vehicle" and self.vehicle then
         self.character:faceLocation(self.vehicle:getX(), self.vehicle:getY())
     elseif self.object then
@@ -459,7 +333,7 @@ function PrySimpleAction:waitToStart()
     return self.character:shouldBeTurning()
 end
 
-function PrySimpleAction:update()
+function PryAnimatedAction:update()
     if self.objType == "vehicle" and self.vehicle then
         self.character:faceLocation(self.vehicle:getX(), self.vehicle:getY())
     elseif self.object then
@@ -468,7 +342,7 @@ function PrySimpleAction:update()
     self.character:setMetabolicTarget(Metabolics.HeavyDomestic)
 end
 
-function PrySimpleAction:start()
+function PryAnimatedAction:start()
     if self.objType == "window" then
         self:setActionAnim("RemoveBarricade")
         self:setAnimVariable("RemoveBarricade","CrowbarHigh")
@@ -480,53 +354,51 @@ function PrySimpleAction:start()
     self.sound = self.character:getEmitter():playSound("CrowbarHit")
 end
 
-function PrySimpleAction:stop()
+function PryAnimatedAction:stop()
     if self.sound then self.character:getEmitter():stopSound(self.sound) end
     ISBaseTimedAction.stop(self)
 end
 
-function PrySimpleAction:perform()
+function PryAnimatedAction:perform()
     if self.sound then self.character:getEmitter():stopSound(self.sound) end
 
-    local failed = false
-
-    -- 25% chance to fail
-    if ZombRand(100) < 25 then
-        failed = true
-        self.character:Say("Failed to pry the " .. self.objType .. "!")
-    else
-        -- Success: complete the action
-        if self.objType == "vehicle" then
-            self:completeVehicle()
-        elseif self.objType == "window" then
-            self:completeWindow()
-        elseif self.objType == "door" or self.objType == "garage" then
-            self:completeDoor()
-        end
-
-        -- Add XP only on success
-        self.character:getXp():AddXP(Perks.Strength, 2)
-        if self.objType == "vehicle" then
-            self.character:getXp():AddXP(Perks.Mechanics, 3)
-        else
-            self.character:getXp():AddXP(Perks.Woodwork, 3)
-        end
+    -- Complete the pry action
+    if self.objType == "vehicle" then
+        self:completeVehicle()
+    elseif self.objType == "window" then
+        self:completeWindow()
+    elseif self.objType == "door" or self.objType == "garage" then
+        self:completeDoor()
     end
 
-    -- Apply tool durability loss (happens regardless of success/failure)
-    -- MP-safe: request server to apply damage if client; server applies authoritatively.
-    requestDamageTool(self.character, self.tool, failed)
+    -- Add XP
+    self.character:getXp():AddXP(Perks.Strength, 2)
+    if self.objType == "vehicle" then
+        self.character:getXp():AddXP(Perks.Mechanics, 3)
+    else
+        self.character:getXp():AddXP(Perks.Woodwork, 3)
+    end
+
+    self.character:Say("Successfully pried open!")
+    
+    -- Apply tool durability loss (REDUCED)
+    applyToolDurabilityLoss(self.character, self.tool, false)
 
     ISBaseTimedAction.perform(self)
 end
 
-function PrySimpleAction:completeDoor()
+function PryAnimatedAction:completeDoor()
     if not self.object then return end
     self.object:setLocked(false)
     self.object:setLockedByKey(false)
     self.object:sync()
     if isServer() then
-        sendServerCommand(self.character,"PryDoor","DoClientOpenDoor",{x=self.object:getX(),y=self.object:getY(),z=self.object:getZ(),playerIndex=self.character:getPlayerNum() or 0})
+        sendServerCommand(self.character,"PryDoor","DoClientOpenDoor",{
+            x=self.object:getX(),
+            y=self.object:getY(),
+            z=self.object:getZ(),
+            playerIndex=self.character:getPlayerNum() or 0
+        })
     end
     if not isClient() then
         if not self.object:IsOpen() then
@@ -536,12 +408,17 @@ function PrySimpleAction:completeDoor()
     self.character:playSound("BreakDoor")
 end
 
-function PrySimpleAction:completeWindow()
+function PryAnimatedAction:completeWindow()
     if not self.object then return end
     self.object:setIsLocked(false)
     self.object:sync()
     if isServer() then
-        sendServerCommand(self.character,"PryDoor","DoClientOpenWindow",{x=self.object:getX(),y=self.object:getY(),z=self.object:getZ(),playerIndex=self.character:getPlayerNum() or 0})
+        sendServerCommand(self.character,"PryDoor","DoClientOpenWindow",{
+            x=self.object:getX(),
+            y=self.object:getY(),
+            z=self.object:getZ(),
+            playerIndex=self.character:getPlayerNum() or 0
+        })
     end
     if not isClient() then
         if ISWorldObjectContextMenu and ISWorldObjectContextMenu.onOpenCloseWindow then
@@ -551,7 +428,7 @@ function PrySimpleAction:completeWindow()
     self.character:playSound("BreakDoor")
 end
 
-function PrySimpleAction:completeVehicle()
+function PryAnimatedAction:completeVehicle()
     if not self.vehiclePart or not self.vehicle then return end
     local door = self.vehiclePart:getDoor()
     if not door then return end
@@ -561,191 +438,333 @@ function PrySimpleAction:completeVehicle()
 end
 
 -- ============================================
--- SERVER COMMAND HANDLER
--- - Handle opening requests (DoClientOpenWindow/DoClientOpenDoor)
--- - Handle DamageTool requests from clients
+-- MINI GAME UI PANEL (REVISED - LARGER)
+-- ============================================
+PryMiniGamePanel = ISPanel:derive("PryMiniGamePanel")
+
+function PryMiniGamePanel:new(x, y, player, object, objType, vehicle, vehiclePart, tool)
+    local o = ISPanel:new(x, y, MINIGAME.width, MINIGAME.height)
+    setmetatable(o, self)
+    self.__index = self
+    
+    o.player = player
+    o.object = object
+    o.objType = objType
+    o.vehicle = vehicle
+    o.vehiclePart = vehiclePart
+    o.tool = tool
+    
+    o.sliderX = 0
+    o.sliderDirection = 1
+    o.pivotX = MINIGAME.autoCenterPivot and (MINIGAME.width - MINIGAME.pivotWidth) / 2 or ZombRand(50, MINIGAME.width - MINIGAME.pivotWidth - 50)
+    o.completed = false
+    o.shouldClose = false
+    
+    o.backgroundColor = {r=0.1, g=0.1, b=0.1, a=0.9}
+    o.borderColor = {r=0.4, g=0.4, b=0.4, a=1}
+    
+    o.quitButtonWidth = 100  -- DIPERBESAR
+    o.quitButtonHeight = 35  -- DIPERBESAR
+    o.quitButtonX = MINIGAME.width - o.quitButtonWidth - 10
+    o.quitButtonY = MINIGAME.height - o.quitButtonHeight - 10
+    
+    debugPrint("Mini game created: pivot at " .. o.pivotX)
+    
+    return o
+end
+
+function PryMiniGamePanel:initialise()
+    ISPanel.initialise(self)
+    self:setVisible(true)
+    self:addToUIManager()
+end
+
+function PryMiniGamePanel:update()
+    ISPanel.update(self)
+    
+    if self.completed then
+        if self.shouldClose then
+            self:close()
+        end
+        return
+    end
+    
+    self.sliderX = self.sliderX + (MINIGAME.speed * self.sliderDirection)
+    
+    local maxX = MINIGAME.width - MINIGAME.sliderWidth
+    if self.sliderX >= maxX then
+        self.sliderX = maxX
+        self.sliderDirection = -1
+    elseif self.sliderX <= 0 then
+        self.sliderX = 0
+        self.sliderDirection = 1
+    end
+end
+
+function PryMiniGamePanel:render()
+    ISPanel.render(self)
+    
+    -- Background
+    self:drawRect(0, 0, self.width, self.height, self.backgroundColor.a, 
+                  self.backgroundColor.r, self.backgroundColor.g, self.backgroundColor.b)
+    self:drawRectBorder(0, 0, self.width, self.height, self.borderColor.a, 
+                        self.borderColor.r, self.borderColor.g, self.borderColor.b)
+    
+    -- Main Title
+    local title = "PRY " .. self.objType:upper() .. " - LEFT CLICK when in zone!"
+    self:drawTextCentre(title, self.width / 2, 15, 1, 1, 1, 1, UIFont.Medium)
+    
+    -- MOD AUTHOR TITLE (ADDED)
+    local authorTitle = "this mod made by Dhevaio AKA dheva1o"
+    self:drawTextCentre(authorTitle, self.width / 2, 40, 0.7, 0.7, 1, 1, UIFont.Small)
+    
+    -- Instruction
+    local instruction = "Click QUIT button to exit | Press SHIFT to cancel"
+    self:drawTextCentre(instruction, self.width / 2, 65, 0.7, 0.7, 0.7, 1, UIFont.Small)
+    
+    -- Track & Pivot & Slider
+    local trackY = 95
+    local trackHeight = 35
+    self:drawRect(10, trackY, self.width - 20, trackHeight, 0.5, 0.2, 0.2, 0.2)
+    
+    -- Pivot Zone
+    self:drawRect(10 + self.pivotX, trackY, MINIGAME.pivotWidth, trackHeight, 0.8, 0.8, 0.1, 0.1)
+    
+    -- Slider
+    local sliderY = trackY + (trackHeight - MINIGAME.sliderHeight) / 2
+    self:drawRect(10 + self.sliderX, sliderY, MINIGAME.sliderWidth, MINIGAME.sliderHeight, 1, 0.2, 0.8, 0.2)
+    
+    -- Quit Button
+    local mouseX = getMouseX()
+    local mouseY = getMouseY()
+    local isHovering = mouseX >= self.x + self.quitButtonX and mouseX <= self.x + self.quitButtonX + self.quitButtonWidth and
+                       mouseY >= self.y + self.quitButtonY and mouseY <= self.y + self.quitButtonY + self.quitButtonHeight
+    
+    if isHovering then
+        self:drawRect(self.quitButtonX, self.quitButtonY, self.quitButtonWidth, self.quitButtonHeight, 1, 0.9, 0.2, 0.2)
+    else
+        self:drawRect(self.quitButtonX, self.quitButtonY, self.quitButtonWidth, self.quitButtonHeight, 0.9, 0.7, 0.1, 0.1)
+    end
+    self:drawRectBorder(self.quitButtonX, self.quitButtonY, self.quitButtonWidth, self.quitButtonHeight, 1, 0.8, 0.8, 0.8)
+    
+    local buttonText = "QUIT"
+    local textWidth = getTextManager():MeasureStringX(UIFont.Medium, buttonText)
+    local textX = self.quitButtonX + (self.quitButtonWidth - textWidth) / 2
+    local textY = self.quitButtonY + (self.quitButtonHeight - getTextManager():getFontHeight(UIFont.Medium)) / 2
+    self:drawText(buttonText, textX, textY, 1, 1, 1, 1, UIFont.Medium)
+    
+    -- Debug info
+    if MINIGAME.debug then
+        local debugText = string.format("Slider: %.1f | Pivot: %.1f-%.1f", 
+                                        self.sliderX, self.pivotX, self.pivotX + MINIGAME.pivotWidth)
+        self:drawText(debugText, 10, self.height - 20, 1, 1, 0, 1, UIFont.Small)
+    end
+end
+
+function PryMiniGamePanel:onMouseDown(x, y)
+    if self.completed then return end
+    
+    local mouseX = x - self.x
+    local mouseY = y - self.y
+    
+    -- Check if clicking QUIT button
+    if mouseX >= self.quitButtonX and mouseX <= self.quitButtonX + self.quitButtonWidth and
+       mouseY >= self.quitButtonY and mouseY <= self.quitButtonY + self.quitButtonHeight then
+        self.player:Say("You exited the mini game")
+        self.completed = true
+        self.shouldClose = true
+        return true
+    end
+    
+    -- Submit mini-game attempt
+    self:submit()
+    return true
+end
+
+function PryMiniGamePanel:onKeyPress(key)
+    if self.completed then return end
+    
+    if key == Keyboard.KEY_LSHIFT or key == Keyboard.KEY_RSHIFT then
+        self.player:Say("You exited the mini game")
+        self.completed = true
+        self.shouldClose = true
+        return true
+    end
+    
+    return false
+end
+
+function PryMiniGamePanel:submit()
+    if self.completed then return end
+    
+    self.completed = true
+    
+    local sliderCenter = self.sliderX + (MINIGAME.sliderWidth / 2)
+    local pivotStart = self.pivotX
+    local pivotEnd = self.pivotX + MINIGAME.pivotWidth
+    
+    local success = sliderCenter >= pivotStart and sliderCenter <= pivotEnd
+    
+    debugPrint(string.format("Submit: center=%.1f, pivot=[%.1f-%.1f], success=%s", 
+                             sliderCenter, pivotStart, pivotEnd, tostring(success)))
+    
+    if success then
+        -- WIN: Start animated pry action
+        ISTimedActionQueue.add(PryAnimatedAction:new(
+            self.player, self.object, self.tool, self.objType, self.vehicle, self.vehiclePart
+        ))
+        self.shouldClose = true
+    else
+        -- FAIL: Exit with extra damage (REDUCED)
+        self.player:Say("Missed! Try again.")
+        applyToolDurabilityLoss(self.player, self.tool, true)
+        self.shouldClose = true
+    end
+end
+
+function PryMiniGamePanel:close()
+    self:setVisible(false)
+    self:removeFromUIManager()
+    debugPrint("Mini game closed")
+end
+
+-- ============================================
+-- SERVER/CLIENT COMMAND HANDLERS
 -- ============================================
 local function onServerCommand(module, command, args)
     if module ~= "PryDoor" then return end
     if not args then return end
-
-    -- Door/window open requests (from server-side action invocation)
+    
+    local playerObj = getSpecificPlayer(args.playerIndex or 0)
+    if not playerObj then return end
+    
     if command == "DoClientOpenWindow" then
-        if not args.x then return end
-        local sq = getCell():getGridSquare(args.x,args.y,args.z)
+        local sq = getCell():getGridSquare(args.x, args.y, args.z)
         if not sq then return end
-        local playerObj = getSpecificPlayer(args.playerIndex or 0)
-        if not playerObj then return end
         local objs = sq:getObjects()
-        for i=0,objs:size()-1 do
+        for i = 0, objs:size() - 1 do
             local obj = objs:get(i)
-            if instanceof(obj,"IsoWindow") then
+            if instanceof(obj, "IsoWindow") then
                 obj:setIsLocked(false)
                 if ISWorldObjectContextMenu and ISWorldObjectContextMenu.onOpenCloseWindow then
-                    ISWorldObjectContextMenu.onOpenCloseWindow(obj,playerObj:getPlayerNum())
+                    ISWorldObjectContextMenu.onOpenCloseWindow(obj, playerObj:getPlayerNum())
                 end
                 return
             end
         end
     elseif command == "DoClientOpenDoor" then
-        if not args.x then return end
-        local sq = getCell():getGridSquare(args.x,args.y,args.z)
+        local sq = getCell():getGridSquare(args.x, args.y, args.z)
         if not sq then return end
-        local playerObj = getSpecificPlayer(args.playerIndex or 0)
-        if not playerObj then return end
         local objs = sq:getObjects()
-        for i=0,objs:size()-1 do
+        for i = 0, objs:size() - 1 do
             local obj = objs:get(i)
-            if instanceof(obj,"IsoDoor") or (instanceof(obj,"IsoThumpable") and obj:isDoor()) then
+            if instanceof(obj, "IsoDoor") or (instanceof(obj, "IsoThumpable") and obj:isDoor()) then
                 obj:setLocked(false)
                 obj:setLockedByKey(false)
-                if not obj:IsOpen() then obj:ToggleDoor(playerObj) end
+                if not obj:IsOpen() then
+                    obj:ToggleDoor(playerObj)
+                end
                 return
             end
         end
-    elseif command == "DamageTool" then
-        -- args: { itemID = <id> (optional), itemType = <type> (optional), failed = bool }
-        -- 'player' in this server callback is not provided - we must use args.playerIndex if sent by client.
-        -- However when sendServerCommand is called from client with player object, server receives the command with args only,
-        -- and we can identify the sender using the network player mapping via getSpecificPlayer if playerIndex included.
-        -- Best-effort: use args.playerIndex, otherwise assume player 0.
-        local playerIndex = args.playerIndex or 0
-        local playerObj = getSpecificPlayer(playerIndex)
-        if not playerObj then
-            -- Try fallback: assume first player
-            playerObj = getSpecificPlayer(0)
-        end
-        if not playerObj then return end
-
+    elseif command == "ApplyToolDamage" then
         local inv = playerObj:getInventory()
-        local toolItem = nil
-
-        if args.itemID and inv.getItemFromID then
-            pcall(function() toolItem = inv:getItemFromID(args.itemID) end)
-        end
-
-        if not toolItem and args.itemType and inv.getItems then
-            -- search for matching item type in inventory
-            local items = inv:getItems()
-            for i = 0, items:size()-1 do
-                local it = items:get(i)
-                if it and it.getType and it:getType() == args.itemType then
-                    toolItem = it
-                    break
+        local items = inv:getItems()
+        
+        for i = 0, items:size() - 1 do
+            local item = items:get(i)
+            if item:getType() == args.toolType then
+                local newCondition = item:getCondition() - args.damage
+                item:setCondition(math.max(newCondition, 0))
+                
+                if newCondition <= 0 then
+                    sendServerCommand(playerObj, "PryDoor", "ShowBroken", {
+                        toolName = item:getDisplayName()
+                    })
                 end
+                return
             end
         end
-
-        -- fallback to hands if still not found
-        if not toolItem then
-            local primary = playerObj:getPrimaryHandItem()
-            if primary and primary.getType and args.itemType and primary:getType() == args.itemType then
-                toolItem = primary
-            else
-                local secondary = playerObj:getSecondaryHandItem()
-                if secondary and secondary.getType and args.itemType and secondary:getType() == args.itemType then
-                    toolItem = secondary
-                end
-            end
-        end
-
-        -- final fallback: try player's primary/secondary hand anyway
-        if not toolItem then
-            if playerObj:getPrimaryHandItem() then toolItem = playerObj:getPrimaryHandItem() end
-            if not toolItem and playerObj:getSecondaryHandItem() then toolItem = playerObj:getSecondaryHandItem() end
-        end
-
-        if not toolItem then return end
-
-        local failed = args.failed and true or false
-        local broke = applyToolDurabilityLoss(toolItem, failed)
-
-        if broke then
-            local name = getItemDisplayName(toolItem)
-            if sendClientCommand then
-                pcall(sendClientCommand, playerObj, "PryDoor", "ShowBroken", { name = name })
-            else
-                if playerObj and playerObj.Say then
-                    playerObj:Say("Your " .. name .. " broke!")
-                end
-            end
-        end
-    elseif command == "ShowBroken" then
-        -- server can ignore; ShowBroken is intended for client display
-        return
     end
 end
 
--- ============================================
--- CLIENT: handler for server->client commands (show broken message)
--- ============================================
 local function onClientCommand(module, command, args)
     if module ~= "PryDoor" then return end
-    if command == "ShowBroken" and args and args.name then
-        local player = getPlayer() -- local player (singleplayer/client)
-        if player and player.Say then
-            player:Say("Your " .. tostring(args.name) .. " broke!")
-        else
-            print("Your " .. tostring(args.name) .. " broke!")
+    
+    if command == "ShowBroken" then
+        local player = getSpecificPlayer(0)
+        if player and args.toolName then
+            player:Say("Your " .. args.toolName .. " broke!")
         end
     end
 end
 
--- Register server/client handlers safely
-pcall(function() Events.OnServerCommand.Add(onServerCommand) end)
-pcall(function() Events.OnClientCommand.Add(onClientCommand) end)
-
 -- ============================================
--- KEYBIND SUPPORT
+-- KEYBIND HANDLER
 -- ============================================
 local function onKeyPressed(key)
     if key ~= Keyboard.KEY_GRAVE then return end
+    
     local player = getSpecificPlayer(0)
     if not player or player:getVehicle() then return end
     
-    -- Check for vehicle first
+    -- Check vehicle
     local vehiclePart, vehicle = findVehicleTarget(player)
     if vehiclePart and vehicle then
-        -- Check skill first
-        if not hasRequiredSkill(player,"vehicle") then
-            player:Say("You need Mechanics level 2 to pry this vehicle!")
+        if not hasRequiredSkill(player, "vehicle") then
+            player:Say("Need " .. getRequiredSkillText("vehicle") .. "!")
             return
         end
         
-        -- Check for specific tool (screwdriver or wrench)
-        local tool = findVehicleTool(player)
+        local tool = findToolForObjectType(player, "vehicle")
         if not tool then
-            player:Say("You need a screwdriver or wrench to pry vehicle doors!")
+            player:Say("Need " .. getRequiredToolText("vehicle") .. "!")
             return
         end
         
-        ISTimedActionQueue.add(PrySimpleAction:new(player,nil,tool,"vehicle",vehicle,vehiclePart))
+        if tool:getCondition() <= 0 then
+            player:Say("Your tool is broken!")
+            return
+        end
+        
+        local panel = PryMiniGamePanel:new(
+            getCore():getScreenWidth() / 2 - MINIGAME.width / 2,
+            getCore():getScreenHeight() / 2 - MINIGAME.height / 2,
+            player, nil, "vehicle", vehicle, vehiclePart, tool
+        )
+        panel:initialise()
         return
     end
     
-    -- Check for world objects (door, garage, window)
+    -- Check world objects
     local worldObj, category = findWorldTarget(player)
     if worldObj and category then
-        -- Check skill first
-        if not hasRequiredSkill(player,category) then
-            local skillText = getRequiredSkillText(category)
-            player:Say("You need "..skillText.." to pry this "..category.."!")
+        if not hasRequiredSkill(player, category) then
+            player:Say("Need " .. getRequiredSkillText(category) .. "!")
             return
         end
         
-        -- Check for specific tool based on object type
         local tool = findToolForObjectType(player, category)
         if not tool then
-            local toolText = getRequiredToolText(category)
-            player:Say("You need a "..toolText.." to pry this "..category.."!")
+            player:Say("Need " .. getRequiredToolText(category) .. "!")
             return
         end
         
-        ISTimedActionQueue.add(PrySimpleAction:new(player,worldObj,tool,category,nil,nil))
+        if tool:getCondition() <= 0 then
+            player:Say("Your tool is broken!")
+            return
+        end
+        
+        local panel = PryMiniGamePanel:new(
+            getCore():getScreenWidth() / 2 - MINIGAME.width / 2,
+            getCore():getScreenHeight() / 2 - MINIGAME.height / 2,
+            player, worldObj, category, nil, nil, tool
+        )
+        panel:initialise()
         return
     end
     
-    player:Say("Nothing locked to pry nearby.")
+    player:Say("Nothing locked nearby.")
 end
 
 -- ============================================
@@ -753,22 +772,27 @@ end
 -- ============================================
 local function init()
     print("=======================================")
-    print("PRY DOOR ADVANCED v"..PRY_MOD.VERSION)
-    print("Keybind: ` (Backtick)")
-    print("Features:")
-    print("  - Realistic tool durability system (MP-safe)")
-    print("  - Tools wear out with each use (screwdriver & wrench fast; crowbar slow)")
-    print("  - Failed attempts cause extra damage")
-    print("  - Supports modded tools (fallback damage)")
-    print("Tool Requirements:")
-    print("  - Vehicle: Screwdriver or Wrench")
-    print("  - Garage: Crowbar only")
-    print("  - Door: Crowbar or Screwdriver")
-    print("  - Window: Crowbar or Screwdriver")
+    print("PRY DOOR ADVANCED v" .. PRY_MOD.VERSION)
+    print("This mod made by Dhevaio AKA dheva1o")
     print("=======================================")
+    print("Keybind: ` (Backtick) to start")
+    print("Features:")
+    print("  - Animated pry with character movement")
+    print("  - Larger mini-game panel")
+    print("  - REDUCED tool durability loss")
+    print("  - QUIT button & SHIFT to exit")
+    print("  - MP-safe implementation")
+    print("Tool Durability (IMPROVED):")
+    print("  - Crowbar: ~25-30 uses (was ~20-33)")
+    print("  - Screwdriver/Wrench: ~20-25 uses (was ~13-15)")
+    print("  - Failed attempts: 1.2x damage")
+    print("=======================================")
+    
     Events.OnKeyPressed.Add(onKeyPressed)
-    -- onServerCommand/onClientCommand already registered above
-    print("[PRY-MOD] Successfully Loaded!")
+    Events.OnServerCommand.Add(onServerCommand)
+    Events.OnClientCommand.Add(onClientCommand)
+    
+    print("[PRY-MOD] Successfully Loaded by Dhevaio!")
 end
 
 Events.OnGameStart.Add(init)
